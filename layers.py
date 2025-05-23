@@ -138,3 +138,28 @@ class Conv(nn.Sequential):
                                           stride=stride,
                                           padding=padding, bias=False,
                                           groups=groups))
+# ─── Add / modify near the bottom of layers.py ───
+class DGCConv2d(nn.Module):
+    def __init__(self,
+                 in_channels, out_channels, kernel_size,
+                 stride=1, padding=0, dilation=1,
+                 groups=1, heads=None,
+                 bias=False, squeeze_rate=16, gate_factor=0.25,
+                 **unused):
+        super().__init__()
+
+        if heads is None:
+            heads = groups if groups > 1 else 4
+        # ── NEW: guarantee valid split ──
+        if (in_channels % heads) or (out_channels % heads):
+            heads = 1
+
+        self.core = DynamicMultiHeadConv(
+            in_channels, out_channels, kernel_size,
+            stride=stride, padding=padding, dilation=dilation,
+            heads=heads, squeeze_rate=squeeze_rate, gate_factor=gate_factor)
+
+    def forward(self, x):
+        y, _lasso = self.core(x)
+        return y
+
