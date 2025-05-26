@@ -59,45 +59,58 @@ def flowers_dataloaders(root, bs=64):
             len(train_set.classes))                         # num_classes
 
 
-class TinyImageNetTrain(tv.datasets.ImageFolder):
-    """
-    Train/val structure:
-      train/<wnid>/images/*.JPEG
-      val/val_annotations.txt    (maps file → wnid)
-      val/images/*.JPEG
-    We ignore bounding‑box text files.
-    """
-    def __init__(self, root, split, transform):
+class TinyImageNet(tv.datasets.VisionDataset):
+    """Handles both the train/ and val/ folders of Tiny‑ImageNet‑200."""
+    def __init__(self, root, split="train", transform=None):
         assert split in {"train", "val"}
+        super().__init__(root, transform=transform, target_transform=None)
+
+        self.loader = tv.datasets.folder.default_loader
+        self.extensions = ("JPEG",)
+
         if split == "train":
-            super().__init__(root / "train", transform=transform,
-                             loader=tv.datasets.folder.default_loader,
-                             is_valid_file=lambda p: p.endswith(".JPEG"))
-        else:  # val
-            # read mapping file
+            # train/<wnid>/images/*.JPEG
+            root = pathlib.Path(root) / "train"
+            classes = sorted(p.name for p in root.iterdir() if p.is_dir())
+            class_to_idx = {c: i for i, c in enumerate(classes)}
+            samples = []
+            for cls in classes:
+                for img in (root / cls / "images").glob("*.JPEG"):
+                    samples.append((img, class_to_idx[cls]))
+        else:
+            # val/images/*.JPEG  +  val/val_annotations.txt
+            root = pathlib.Path(root) / "val"
             ann = {}
-            with open(root / "val" / "val_annotations.txt") as f:
-                for row in csv.reader(f, delimiter="\t"):
-                    ann[row[0]] = row[1]
-            # build list of (path, class_idx)
+            with open(root / "val_annotations.txt") as f:
+                for line in f:
+                    fname, wnid, *_ = line.split("\t")
+                    ann[fname] = wnid
             classes = sorted({wnid for wnid in ann.values()})
-            cls2idx = {c: i for i, c in enumerate(classes)}
-            samples = [(root / "val" / "images" / fname, cls2idx[ann[fname]])
+            class_to_idx = {c: i for i, c in enumerate(classes)}
+            samples = [(root / "images" / fname, class_to_idx[ann[fname]])
                        for fname in ann]
-            super(tv.datasets.VisionDataset, self).__init__(root,
-                 loader=tv.datasets.folder.default_loader,
-                 extensions=("JPEG",),
-                 transform=transform, target_transform=None)
-            self.classes, self.class_to_idx = classes, cls2idx
-            self.samples, self.targets = samples, [s[1] for s in samples]
+
+        self.classes, self.class_to_idx = classes, class_to_idx
+        self.samples, self.targets = samples, [s[1] for s in samples]
+
+    def __getitem__(self, index):
+        path, target = self.samples[index]
+        sample = self.loader(path)
+        if self.transform:
+            sample = self.transform(sample)
+        return sample, target
+
+    def __len__(self):
+        return len(self.samples)
+
 
 def tiny_dataloaders(root, bs=64):
-    root = pathlib.Path(root)
-    train_set = TinyImageNetTrain(root, "train", tfm(64))
-    val_set   = TinyImageNetTrain(root, "val",   tfm(64))
+    """Returns (train_loader, val_loader, num_classes)."""
+    train_set = TinyImageNet(root, "train", transform=tfm(64))
+    val_set   = TinyImageNet(root, "val",   transform=tfm(64))
     return (DataLoader(train_set, batch_size=bs, shuffle=True,  num_workers=4),
             DataLoader(val_set,   batch_size=bs, shuffle=False, num_workers=4),
-            200)                                             # 200 classes
+            200)                                                  # 200 classes
 
 
 def medical_dataloaders(root, bs=64):
