@@ -139,27 +139,46 @@ class Conv(nn.Sequential):
                                           padding=padding, bias=False,
                                           groups=groups))
 # ─── Add / modify near the bottom of layers.py ───
+# layers.py  ── put this RIGHT BELOW the DynamicMultiHeadConv class
+import torch.nn as nn
+
 class DGCConv2d(nn.Module):
+    """
+    Alias + safety wrapper around DynamicMultiHeadConv.
+    • Falls back to a plain grouped Conv2d for depth‑wise layers.
+    • Ensures `heads` divides both in/out channels; else heads=1.
+    • Accepts ordinary Conv2d kwargs so backbone code stays unchanged.
+    """
     def __init__(self,
                  in_channels, out_channels, kernel_size,
                  stride=1, padding=0, dilation=1,
                  groups=1, heads=None,
                  bias=False, squeeze_rate=16, gate_factor=0.25,
-                 **unused):
+                 **unused):                       # swallow extra kwargs
         super().__init__()
 
+        # ── 0. Depth‑wise layer?  Use vanilla conv, no gating needed ──
+        if groups == in_channels == out_channels:
+            self.core = nn.Conv2d(in_channels, out_channels, kernel_size,
+                                  stride=stride, padding=padding,
+                                  dilation=dilation, groups=groups, bias=bias)
+            self.forward = self.core.forward     # bypass wrapper
+            return
+
+        # ── 1. Choose head count ──
         if heads is None:
             heads = groups if groups > 1 else 4
-        # ── NEW: guarantee valid split ──
         if (in_channels % heads) or (out_channels % heads):
-            heads = 1
+            heads = 1                            # fall back to single head
 
+        # ── 2. Use DynamicMultiHeadConv for the rest ──
         self.core = DynamicMultiHeadConv(
             in_channels, out_channels, kernel_size,
             stride=stride, padding=padding, dilation=dilation,
             heads=heads, squeeze_rate=squeeze_rate, gate_factor=gate_factor)
 
     def forward(self, x):
-        y, _lasso = self.core(x)
+        y, _lasso = self.core(x)                 # drop aux loss for now
         return y
+
 
